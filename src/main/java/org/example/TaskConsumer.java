@@ -8,12 +8,17 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.concurrent.TimeoutException;
 
 public class TaskConsumer {
     private static final String TASK_QUEUE = "task_queue";
     private static final String RESULT_QUEUE = "result_queue";
     private static final Logger LOGGER = LogManager.getLogger(Crawler.class);
+    private static final HttpClient CLIENT = HttpClient.newHttpClient();
 
     public static void startConsuming() {
         try {
@@ -38,27 +43,34 @@ public class TaskConsumer {
 
     private static String processPage(String url) {
         Document doc = getPage(url);
-        String title = doc.select(".topic-body__title").text();
-        String date = doc.select(".topic-header__item.topic-header__time").text();
-        String name = doc.select(".topic-authors__name").text();
-        String content = doc.select(".topic-body__content-text").text();
-        return String.format("Title: %s\nDate: %s\nName: %s\nContent: %s\nURL: %s", title, date, name, content, url);
+        if (doc != null) {
+            String title = doc.select(".topic-body__title").text();
+            String date = doc.select(".topic-header__item.topic-header__time").text();
+            String name = doc.select(".topic-authors__name").text();
+            String content = doc.select(".topic-body__content-text").text();
+            return String.format("Title: %s\nDate: %s\nName: %s\nContent: %s\nURL: %s", title, date, name, content, url);
+        }
+        return "Error: Could not process page " + url;
     }
 
     private static Document getPage(String url) {
         try {
-            org.jsoup.Connection.Response response = Jsoup.connect(url)
-                    .timeout(10000)
-                    .execute();
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("User-Agent", "Mozilla/5.0")
+                    .GET()
+                    .build();
 
+            HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
             int statusCode = response.statusCode();
+
             if (statusCode == 200) {
-                return response.parse();
+                return Jsoup.parse(response.body());
             } else {
                 handleHttpError(statusCode, url);
                 return null;
             }
-        } catch (IOException e) {
+        } catch (IOException | InterruptedException e) {
             LOGGER.error("Ошибка загрузки страницы {}: {}", url, e.getMessage());
             return null;
         }

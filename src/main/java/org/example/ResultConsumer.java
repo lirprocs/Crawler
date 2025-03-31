@@ -15,10 +15,11 @@ public class ResultConsumer {
             Connection connection = RabbitMQConnector.getConnection();
             Channel channel = RabbitMQConnector.createChannel(connection);
 
-            channel.basicConsume(RESULT_QUEUE, true, (consumerTag, delivery) -> {
+            channel.basicConsume(RESULT_QUEUE, false, (consumerTag, delivery) -> {
                 String message = new String(delivery.getBody(), "UTF-8");
                 System.out.println(" [x] Получен результат: \n" + message);
                 System.out.println("--------------------------------------------");
+                channel.basicAck(delivery.getEnvelope().getDeliveryTag(), false);
             }, consumerTag -> {});
 
         } catch (IOException | TimeoutException e) {

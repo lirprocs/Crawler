@@ -24,9 +24,24 @@ public class Crawler {
             Elements newsElements = document.select(".parts-page__item");
             for (Element news : newsElements) {
                 String link = "https://lenta.ru" + news.select("._parts-news").attr("href");
-                TaskProducer.sendTask(link);
+                if (isValidUrl(link)) {
+                    TaskProducer.sendTask(link);
+                } else {
+                    LOGGER.warn("Пропущена некорректная ссылка: {}", link);
+                }
             }
         });
+    }
+
+    private static boolean isValidUrl(String url) {
+        try {
+            URI uri = URI.create(url);
+            return uri.getScheme().equals("https") && 
+                   uri.getHost().equals("lenta.ru") &&
+                   !url.contains("lenta.ruhttps");
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private static Optional<Document> getPage(String url) {
