@@ -6,14 +6,24 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
+import org.example.model.NewsDocument;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.concurrent.TimeoutException;
 
 public class TaskConsumer {
     private static final String TASK_QUEUE = "task_queue";
     private static final String RESULT_QUEUE = "result_queue";
-    private static final Logger LOGGER = LogManager.getLogger(Crawler.class);
+    private static final Logger LOGGER = LogManager.getLogger(TaskConsumer.class);
+    private static final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private static final DateTimeFormatter inputDateFormatter = DateTimeFormatter.ofPattern("HH:mm, d MMMM yyyy");
+    private static final DateTimeFormatter outputDateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
     public static void startConsuming() {
         try {
@@ -22,65 +32,50 @@ public class TaskConsumer {
 
             channel.basicConsume(TASK_QUEUE, false, (consumerTag, delivery) -> {
                 String url = new String(delivery.getBody(), "UTF-8");
-                System.out.println(" [x] Обрабатываем: " + url);
+                LOGGER.info("Обрабатываем: {}", url);
 
-                String result = processPage(url);
-                channel.basicPublish("", RESULT_QUEUE, null, result.getBytes());
-                System.out.println(" [x] Сохранено в result_queue");
+                try {
+                    String normalizedUrl = Crawler.normalizeUrl(url);
+                    if (normalizedUrl != null) {
+                        NewsDocument document = processPage(normalizedUrl);
+                        if (document != null) {
+                            String json = objectMapper.writeValueAsString(document);
+                            channel.basicPublish("", RESULT_QUEUE, null, json.getBytes());
+                            LOGGER.info("Сохранено в result_queue");
+                        }
+                    }
+                } catch (Exception e) {
+                    LOGGER.error("Ошибка при обработке URL {}: {}", url, e.getMessage());
+                }
 
                 channel.basicAck(delivery.getEnvelope().getDeliveryTag(), false);
             }, consumerTag -> {});
 
         } catch (IOException | TimeoutException e) {
-            e.printStackTrace();
+            LOGGER.error("Ошибка при подключении к RabbitMQ: {}", e.getMessage());
         }
     }
 
-    private static String processPage(String url) {
-        Document doc = getPage(url);
-        String title = doc.select(".topic-body__title").text();
-        String date = doc.select(".topic-header__item.topic-header__time").text();
-        String name = doc.select(".topic-authors__name").text();
-        String content = doc.select(".topic-body__content-text").text();
-        return String.format("Title: %s\nDate: %s\nName: %s\nContent: %s\nURL: %s", title, date, name, content, url);
-    }
 
-    private static Document getPage(String url) {
+    private static NewsDocument processPage(String url) {
         try {
-            org.jsoup.Connection.Response response = Jsoup.connect(url)
-                    .timeout(10000)
-                    .execute();
+            Document doc = Jsoup.connect(url).get();
+            
+            String title = doc.select(".topic-body__title").text();
+            String dateStr = doc.select(".topic-header__item.topic-header__time").text();
+            String author = doc.select(".topic-authors__name").text();
+            String content = doc.select(".topic-body__content-text").text();
 
-            int statusCode = response.statusCode();
-            if (statusCode == 200) {
-                return response.parse();
-            } else {
-                handleHttpError(statusCode, url);
+            if (title.isEmpty() || dateStr.isEmpty() || author.isEmpty() || content.isEmpty()) {
+                LOGGER.warn("Неполные данные на странице: {}", url);
                 return null;
             }
-        } catch (IOException e) {
-            LOGGER.error("Ошибка загрузки страницы {}: {}", url, e.getMessage());
-            return null;
-        }
-    }
 
-    private static void handleHttpError(int statusCode, String url) {
-        switch (statusCode) {
-            case 400:
-                LOGGER.error("Error 400 Bad Request for URL: {}", url);
-                break;
-            case 403:
-                LOGGER.error("Error 403 Forbidden for URL: {}", url);
-                break;
-            case 404:
-                LOGGER.error("Error 404 Not Found for URL: {}", url);
-                break;
-            case 500:
-                LOGGER.error("Error 500 Internal Server Error for URL: {}", url);
-                break;
-            default:
-                LOGGER.error("Unexpected HTTP status code {} for URL: {}", statusCode, url);
-                break;
+            LocalDateTime date = LocalDateTime.parse(dateStr, inputDateFormatter);
+            return new NewsDocument(title, date, content, url, author);
+        } catch (Exception e) {
+            LOGGER.error("Ошибка при обработке страницы {}: {}", url, e.getMessage());
+            return null;
         }
     }
 }
